@@ -4,8 +4,8 @@
 
 参考 [piwind/docker-zerotier-planet](https://github.com/piwind/docker-zerotier-planet) 重写，用 Rust 编写的轻量面板取代 ztncui，并完成了原项目的全部 TODO。
 
-- ZeroTier **1.16.2**（当前最新稳定版），控制器功能完整
-- 管理面板为单个 Rust 静态二进制（约几 MB），镜像不含 Node.js
+- ZeroTier 默认 **1.16.2**（构建参数 `TAG` 可指定版本，CI 每周自动跟进官方最新版），控制器功能完整
+- 管理面板为单个 Rust 静态二进制（约 2 MB），整个镜像约 37 MB，不含 Node.js
 - 面板与 planet 文件下载服务内置在同一进程中
 
 ## 原项目 TODO 完成情况
@@ -19,7 +19,7 @@
 | 二维码 | 网络 ID、planet 下载地址、完整接入信息均可扫码 |
 | 手机版界面不友好 | 移动优先的响应式界面：底部标签栏、成员卡片、表格自动变为卡片布局，支持深色模式 |
 
-## 有没有比 ztncui 更好的管理界面？
+## 与其他管理面板的比较
 
 - **本项目自带面板**：专为自建 planet 设计（planet / 多根节点 / 文件下载 / 二维码一体化），轻量，不依赖数据库。
 - **[ztnet](https://github.com/sinamics/ztnet)**：目前功能最完整的开源 ZeroTier 控制器面板（Next.js + PostgreSQL）。支持多用户、组织、规则编辑、网络流量统计，也内置了私有 planet 生成，界面现代且适配手机。需要更多团队协作功能时推荐。
@@ -84,10 +84,18 @@ zerotier-cli join <网络ID>
 
 ## 从 docker-zerotier-planet 迁移
 
-将旧的 `data/zerotier/one` 目录复制到新的数据目录（`data/zerotier/one`）后启动即可：
+旧项目的 `data/zerotier` 下有 `one`（节点身份、网络、planet 签名密钥）和 `config`（端口、IP、文件下载密钥）两个目录，**两个都要复制**：
 
-- 节点身份、网络、成员、planet 签名密钥都会保留，客户端无需任何修改；
-- 首次启动时会读取旧的 `moon.json` 端点生成 `config/planet.json`；
+1. 停止旧容器并备份 `data/zerotier`。
+2. 运行 `./deploy.sh` 安装主节点，端口填写与旧部署相同的值（例如 9993、3443、3000）。
+3. `docker stop ztplanet`，用旧的 `one`、`config` 覆盖新的 `data/zerotier/one`、`data/zerotier/config`，再 `docker start ztplanet`。
+
+> `deploy.sh install` 会删除已存在的数据目录，所以必须先安装、再覆盖，不要先把旧数据放进去。使用 docker compose 时直接挂载旧目录，并把 `ZT_PORT` 和端口映射设为旧端口即可。
+
+迁移后：
+
+- 节点身份、网络、成员、planet 签名密钥、端口和文件下载密钥都会保留，客户端无需任何修改；
+- 首次启动时会沿用旧 `moon.json` 中的端点生成 `config/planet.json`，planet ID 不变；
 - ztncui 的账号不会迁移，使用 `admin` / `password` 登录后修改密码，并在各网络的「设置」页为原有网络分配所有者（管理员默认可见全部网络）。
 
 ## 环境变量
