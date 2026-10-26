@@ -1,45 +1,146 @@
 name: docker
 
+# 普通 push / PR 只跑测试；打 v* tag、手动触发、每周定时检查 ZeroTier 新版本时才构建发布镜像
 on:
   push:
     branches: [main]
     tags: ["v*"]
+  pull_request:
   schedule:
-    - cron: "0 3 * * 1"   # 每周检查 ZeroTier 新版本
+    - cron: "0 3 * * 1"
   workflow_dispatch:
     inputs:
       zerotier_tag:
         description: "ZeroTier 版本（留空为最新）"
         required: false
+      force:
+        description: "镜像已存在时也重新构建"
+        type: boolean
+        default: true
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/zerotier-planet
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: panel
       - run: cargo test
         working-directory: panel
-      - run: cargo clippy -- -D warnings
+      - run: cargo clippy --all-targets -- -D warnings
         working-directory: panel
 
-  build:
+  prepare:
     needs: test
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request'
+    outputs:
+      zt_tag: ${{ steps.ver.outputs.zt_tag }}
+      skip: ${{ steps.ver.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
+      - id: ver
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ github.event.inputs.zerotier_tag }}
+          FORCE: ${{ github.event_name != 'schedule' && (github.event_name != 'workflow_dispatch' || github.event.inputs.force == 'true') }}
+        run: |
+          if [ -z "${{ secrets.DOCKERHUB_USERNAME }}" ]; then
+            echo "::error::未配置 DOCKERHUB_USERNAME / DOCKERHUB_TOKEN"
+            exit 1
+          fi
+          TAG="$INPUT_TAG"
+          if [ -z "$TAG" ]; then
+            TAG=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" \
+              https://api.github.com/repos/zerotier/ZeroTierOne/releases/latest | jq -r .tag_name)
+          fi
+          echo "ZeroTier 版本: $TAG"
+          echo "zt_tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && docker buildx imagetools inspect "$IMAGE:$TAG" >/dev/null 2>&1; then
+            echo "$IMAGE:$TAG 已存在，跳过构建"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # 各架构在原生 runner 上并行构建（不使用 QEMU 模拟），按 digest 推送
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            arch: amd64
+            runner: ubuntu-latest
+          - platform: linux/arm64
+            arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: build and push
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          build-args: TAG=${{ needs.prepare.outputs.zt_tag }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,scope=${{ matrix.arch }},mode=max
+      - name: export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # 合并为多架构镜像并打标签
+  merge:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: create manifest
+        working-directory: /tmp/digests
         env:
-          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-          SPEC_ZEROTIER_TAG: ${{ github.event.inputs.zerotier_tag }}
-          FORCE_REBUILD: ${{ github.event_name == 'schedule' && '0' || '1' }}
-        run: ./build.sh
+          ZT_TAG: ${{ needs.prepare.outputs.zt_tag }}
+        run: |
+          tags=(-t "$IMAGE:latest" -t "$IMAGE:$ZT_TAG")
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tags+=(-t "$IMAGE:${GITHUB_REF_NAME}")
+          fi
+          sources=()
+          for d in *; do sources+=("$IMAGE@sha256:$d"); done
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "$IMAGE:latest"

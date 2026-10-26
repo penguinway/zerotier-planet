@@ -142,6 +142,16 @@ panel/              # Rust 面板（axum），前端为无构建步骤的原生 
 cd panel && cargo test
 ```
 
+### 发布镜像（GitHub Actions）
+
+在仓库 Secrets 中配置 `DOCKERHUB_USERNAME`、`DOCKERHUB_TOKEN`。
+
+- 普通 push / PR：只运行测试和 clippy
+- 推送 `v*` tag、在 Actions 页手动运行：构建并发布 `latest`、`<ZeroTier 版本>`（以及 `<tag>`）
+- 每周一自动检查 ZeroTier 新版本，镜像不存在时才构建
+
+amd64 与 arm64 分别在原生 runner 上并行构建（不使用 QEMU），并启用构建缓存。
+
 ## 许可
 
 - 本项目代码：[MIT](LICENSE)（vendor 中的第三方文件除外）
