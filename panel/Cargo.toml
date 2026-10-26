@@ -1,0 +1,29 @@
+[package]
+name = "ztpanel"
+version = "0.1.0"
+edition = "2021"
+description = "ZeroTier 自建 planet / controller 管理面板"
+license = "MIT"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "process", "fs", "signal", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+argon2 = { version = "0.5", features = ["std"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+subtle = "2"
+rust-embed = "8"
+mime_guess = "2"
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

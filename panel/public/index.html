@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1f6feb">
+  <base href="__BASE__">
+  <title>ZeroTier Planet 控制台</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app"><div class="boot">加载中…</div></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="vendor/qrcode.js"></script>
+  <!-- 官方 rule-compiler.js 以 CommonJS 形式导出，这里提供 exports 对象供浏览器使用 -->
+  <script>window.exports = {};</script>
+  <script src="vendor/rule-compiler.js"></script>
+  <script>window.RuleCompiler = window.exports; delete window.exports;</script>
+  <script src="app.js"></script>
+</body>
+</html>
